@@ -5,6 +5,7 @@
 package autocert
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -21,11 +22,12 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"sync"
 	"testing"
 	"time"
 
 	"golang.org/x/crypto/acme"
-	"golang.org/x/net/context"
 )
 
 var discoTmpl = template.Must(template.New("disco").Parse(`{
@@ -50,24 +52,42 @@ var authzTmpl = template.Must(template.New("authz").Parse(`{
 	]
 }`))
 
-type memCache map[string][]byte
+type memCache struct {
+	mu      sync.Mutex
+	keyData map[string][]byte
+}
 
-func (m memCache) Get(ctx context.Context, key string) ([]byte, error) {
-	v, ok := m[key]
+func (m *memCache) Get(ctx context.Context, key string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	v, ok := m.keyData[key]
 	if !ok {
 		return nil, ErrCacheMiss
 	}
 	return v, nil
 }
 
-func (m memCache) Put(ctx context.Context, key string, data []byte) error {
-	m[key] = data
+func (m *memCache) Put(ctx context.Context, key string, data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.keyData[key] = data
 	return nil
 }
 
-func (m memCache) Delete(ctx context.Context, key string) error {
-	delete(m, key)
+func (m *memCache) Delete(ctx context.Context, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.keyData, key)
 	return nil
+}
+
+func newMemCache() *memCache {
+	return &memCache{
+		keyData: make(map[string][]byte),
+	}
 }
 
 func dummyCert(pub interface{}, san ...string) ([]byte, error) {
@@ -107,10 +127,41 @@ func decodePayload(v interface{}, r io.Reader) error {
 }
 
 func TestGetCertificate(t *testing.T) {
-	const domain = "example.org"
 	man := &Manager{Prompt: AcceptTOS}
 	defer man.stopRenew()
+	hello := &tls.ClientHelloInfo{ServerName: "example.org"}
+	testGetCertificate(t, man, "example.org", hello)
+}
 
+func TestGetCertificate_trailingDot(t *testing.T) {
+	man := &Manager{Prompt: AcceptTOS}
+	defer man.stopRenew()
+	hello := &tls.ClientHelloInfo{ServerName: "example.org."}
+	testGetCertificate(t, man, "example.org", hello)
+}
+
+func TestGetCertificate_ForceRSA(t *testing.T) {
+	man := &Manager{
+		Prompt:   AcceptTOS,
+		Cache:    newMemCache(),
+		ForceRSA: true,
+	}
+	defer man.stopRenew()
+	hello := &tls.ClientHelloInfo{ServerName: "example.org"}
+	testGetCertificate(t, man, "example.org", hello)
+
+	cert, err := man.cacheGet(context.Background(), "example.org")
+	if err != nil {
+		t.Fatalf("man.cacheGet: %v", err)
+	}
+	if _, ok := cert.PrivateKey.(*rsa.PrivateKey); !ok {
+		t.Errorf("cert.PrivateKey is %T; want *rsa.PrivateKey", cert.PrivateKey)
+	}
+}
+
+// tests man.GetCertificate flow using the provided hello argument.
+// The domain argument is the expected domain name of a certificate request.
+func testGetCertificate(t *testing.T, man *Manager, domain string, hello *tls.ClientHelloInfo) {
 	// echo token-02 | shasum -a 256
 	// then divide result in 2 parts separated by dot
 	tokenCertName := "4e8eb87631187e9ff2153b56b13a4dec.13a35d002e485d60ff37354b32f665d9.token.acme.invalid"
@@ -166,6 +217,9 @@ func TestGetCertificate(t *testing.T) {
 			if err != nil {
 				t.Fatalf("new-cert: CSR: %v", err)
 			}
+			if csr.Subject.CommonName != domain {
+				t.Errorf("CommonName in CSR = %q; want %q", csr.Subject.CommonName, domain)
+			}
 			der, err := dummyCert(csr.PublicKey, domain)
 			if err != nil {
 				t.Fatalf("new-cert: dummyCert: %v", err)
@@ -201,7 +255,6 @@ func TestGetCertificate(t *testing.T) {
 	var tlscert *tls.Certificate
 	done := make(chan struct{})
 	go func() {
-		hello := &tls.ClientHelloInfo{ServerName: domain}
 		tlscert, err = man.GetCertificate(hello)
 		close(done)
 	}()
@@ -245,6 +298,22 @@ func TestGetCertificate(t *testing.T) {
 	}
 }
 
+func TestAccountKeyCache(t *testing.T) {
+	m := Manager{Cache: newMemCache()}
+	ctx := context.Background()
+	k1, err := m.accountKey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k2, err := m.accountKey(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(k1, k2) {
+		t.Errorf("account keys don't match: k1 = %#v; k2 = %#v", k1, k2)
+	}
+}
+
 func TestCache(t *testing.T) {
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -264,13 +333,13 @@ func TestCache(t *testing.T) {
 		PrivateKey:  privKey,
 	}
 
-	cache := make(memCache)
-	man := &Manager{Cache: cache}
+	man := &Manager{Cache: newMemCache()}
 	defer man.stopRenew()
-	if err := man.cachePut("example.org", tlscert); err != nil {
+	ctx := context.Background()
+	if err := man.cachePut(ctx, "example.org", tlscert); err != nil {
 		t.Fatalf("man.cachePut: %v", err)
 	}
-	res, err := man.cacheGet("example.org")
+	res, err := man.cacheGet(ctx, "example.org")
 	if err != nil {
 		t.Fatalf("man.cacheGet: %v", err)
 	}

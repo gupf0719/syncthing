@@ -15,6 +15,7 @@ package acme
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -36,9 +37,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/net/context"
-	"golang.org/x/net/context/ctxhttp"
 )
 
 // LetsEncryptURL is the Directory endpoint of Let's Encrypt CA.
@@ -47,6 +45,10 @@ const LetsEncryptURL = "https://acme-v01.api.letsencrypt.org/directory"
 const (
 	maxChainLen = 5       // max depth and breadth of a certificate chain
 	maxCertSize = 1 << 20 // max size of a certificate, in bytes
+
+	// Max number of collected nonces kept in memory.
+	// Expect usual peak of 1 or 2.
+	maxNonces = 100
 )
 
 // CertOption is an optional argument type for Client methods which manipulate
@@ -108,6 +110,9 @@ type Client struct {
 
 	dirMu sync.Mutex // guards writes to dir
 	dir   *Directory // cached result of Client's Discover method
+
+	noncesMu sync.Mutex
+	nonces   map[string]struct{} // nonces collected from previous responses
 }
 
 // Discover performs ACME server discovery using c.DirectoryURL.
@@ -126,11 +131,12 @@ func (c *Client) Discover(ctx context.Context) (Directory, error) {
 	if dirURL == "" {
 		dirURL = LetsEncryptURL
 	}
-	res, err := ctxhttp.Get(ctx, c.HTTPClient, dirURL)
+	res, err := c.get(ctx, dirURL)
 	if err != nil {
 		return Directory{}, err
 	}
 	defer res.Body.Close()
+	c.addNonce(res.Header)
 	if res.StatusCode != http.StatusOK {
 		return Directory{}, responseError(res)
 	}
@@ -192,7 +198,7 @@ func (c *Client) CreateCert(ctx context.Context, csr []byte, exp time.Duration, 
 		req.NotAfter = now.Add(exp).Format(time.RFC3339)
 	}
 
-	res, err := postJWS(ctx, c.HTTPClient, c.Key, c.dir.CertURL, req)
+	res, err := c.postJWS(ctx, c.Key, c.dir.CertURL, req)
 	if err != nil {
 		return nil, "", err
 	}
@@ -208,7 +214,7 @@ func (c *Client) CreateCert(ctx context.Context, csr []byte, exp time.Duration, 
 		return cert, curl, err
 	}
 	// slurp issued cert and CA chain, if requested
-	cert, err := responseCert(ctx, c.HTTPClient, res, bundle)
+	cert, err := c.responseCert(ctx, res, bundle)
 	return cert, curl, err
 }
 
@@ -223,13 +229,13 @@ func (c *Client) CreateCert(ctx context.Context, csr []byte, exp time.Duration, 
 // and has expected features.
 func (c *Client) FetchCert(ctx context.Context, url string, bundle bool) ([][]byte, error) {
 	for {
-		res, err := ctxhttp.Get(ctx, c.HTTPClient, url)
+		res, err := c.get(ctx, url)
 		if err != nil {
 			return nil, err
 		}
 		defer res.Body.Close()
 		if res.StatusCode == http.StatusOK {
-			return responseCert(ctx, c.HTTPClient, res, bundle)
+			return c.responseCert(ctx, res, bundle)
 		}
 		if res.StatusCode > 299 {
 			return nil, responseError(res)
@@ -267,7 +273,7 @@ func (c *Client) RevokeCert(ctx context.Context, key crypto.Signer, cert []byte,
 	if key == nil {
 		key = c.Key
 	}
-	res, err := postJWS(ctx, c.HTTPClient, key, c.dir.RevokeURL, body)
+	res, err := c.postJWS(ctx, key, c.dir.RevokeURL, body)
 	if err != nil {
 		return err
 	}
@@ -355,7 +361,7 @@ func (c *Client) Authorize(ctx context.Context, domain string) (*Authorization, 
 		Resource:   "new-authz",
 		Identifier: authzID{Type: "dns", Value: domain},
 	}
-	res, err := postJWS(ctx, c.HTTPClient, c.Key, c.dir.AuthzURL, req)
+	res, err := c.postJWS(ctx, c.Key, c.dir.AuthzURL, req)
 	if err != nil {
 		return nil, err
 	}
@@ -379,7 +385,7 @@ func (c *Client) Authorize(ctx context.Context, domain string) (*Authorization, 
 // If a caller needs to poll an authorization until its status is final,
 // see the WaitAuthorization method.
 func (c *Client) GetAuthorization(ctx context.Context, url string) (*Authorization, error) {
-	res, err := ctxhttp.Get(ctx, c.HTTPClient, url)
+	res, err := c.get(ctx, url)
 	if err != nil {
 		return nil, err
 	}
@@ -406,12 +412,14 @@ func (c *Client) GetAuthorization(ctx context.Context, url string) (*Authorizati
 func (c *Client) RevokeAuthorization(ctx context.Context, url string) error {
 	req := struct {
 		Resource string `json:"resource"`
+		Status   string `json:"status"`
 		Delete   bool   `json:"delete"`
 	}{
 		Resource: "authz",
+		Status:   "deactivated",
 		Delete:   true,
 	}
-	res, err := postJWS(ctx, c.HTTPClient, c.Key, url, req)
+	res, err := c.postJWS(ctx, c.Key, url, req)
 	if err != nil {
 		return err
 	}
@@ -446,7 +454,7 @@ func (c *Client) WaitAuthorization(ctx context.Context, url string) (*Authorizat
 	}
 
 	for {
-		res, err := ctxhttp.Get(ctx, c.HTTPClient, url)
+		res, err := c.get(ctx, url)
 		if err != nil {
 			return nil, err
 		}
@@ -483,7 +491,7 @@ func (c *Client) WaitAuthorization(ctx context.Context, url string) (*Authorizat
 //
 // A client typically polls a challenge status using this method.
 func (c *Client) GetChallenge(ctx context.Context, url string) (*Challenge, error) {
-	res, err := ctxhttp.Get(ctx, c.HTTPClient, url)
+	res, err := c.get(ctx, url)
 	if err != nil {
 		return nil, err
 	}
@@ -517,7 +525,7 @@ func (c *Client) Accept(ctx context.Context, chal *Challenge) (*Challenge, error
 		Type:     chal.Type,
 		Auth:     auth,
 	}
-	res, err := postJWS(ctx, c.HTTPClient, c.Key, chal.URI, req)
+	res, err := c.postJWS(ctx, c.Key, chal.URI, req)
 	if err != nil {
 		return nil, err
 	}
@@ -650,7 +658,7 @@ func (c *Client) doReg(ctx context.Context, url string, typ string, acct *Accoun
 		req.Contact = acct.Contact
 		req.Agreement = acct.AgreedTerms
 	}
-	res, err := postJWS(ctx, c.HTTPClient, c.Key, url, req)
+	res, err := c.postJWS(ctx, c.Key, url, req)
 	if err != nil {
 		return nil, err
 	}
@@ -687,7 +695,129 @@ func (c *Client) doReg(ctx context.Context, url string, typ string, acct *Accoun
 	}, nil
 }
 
-func responseCert(ctx context.Context, client *http.Client, res *http.Response, bundle bool) ([][]byte, error) {
+// postJWS signs the body with the given key and POSTs it to the provided url.
+// The body argument must be JSON-serializable.
+func (c *Client) postJWS(ctx context.Context, key crypto.Signer, url string, body interface{}) (*http.Response, error) {
+	nonce, err := c.popNonce(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	b, err := jwsEncodeJSON(body, key, nonce)
+	if err != nil {
+		return nil, err
+	}
+	res, err := c.post(ctx, url, "application/jose+json", bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	c.addNonce(res.Header)
+	return res, nil
+}
+
+// popNonce returns a nonce value previously stored with c.addNonce
+// or fetches a fresh one from the given URL.
+func (c *Client) popNonce(ctx context.Context, url string) (string, error) {
+	c.noncesMu.Lock()
+	defer c.noncesMu.Unlock()
+	if len(c.nonces) == 0 {
+		return c.fetchNonce(ctx, url)
+	}
+	var nonce string
+	for nonce = range c.nonces {
+		delete(c.nonces, nonce)
+		break
+	}
+	return nonce, nil
+}
+
+// addNonce stores a nonce value found in h (if any) for future use.
+func (c *Client) addNonce(h http.Header) {
+	v := nonceFromHeader(h)
+	if v == "" {
+		return
+	}
+	c.noncesMu.Lock()
+	defer c.noncesMu.Unlock()
+	if len(c.nonces) >= maxNonces {
+		return
+	}
+	if c.nonces == nil {
+		c.nonces = make(map[string]struct{})
+	}
+	c.nonces[v] = struct{}{}
+}
+
+func (c *Client) httpClient() *http.Client {
+	if c.HTTPClient != nil {
+		return c.HTTPClient
+	}
+	return http.DefaultClient
+}
+
+func (c *Client) get(ctx context.Context, urlStr string) (*http.Response, error) {
+	req, err := http.NewRequest("GET", urlStr, nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.do(ctx, req)
+}
+
+func (c *Client) head(ctx context.Context, urlStr string) (*http.Response, error) {
+	req, err := http.NewRequest("HEAD", urlStr, nil)
+	if err != nil {
+		return nil, err
+	}
+	return c.do(ctx, req)
+}
+
+func (c *Client) post(ctx context.Context, urlStr, contentType string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequest("POST", urlStr, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", contentType)
+	return c.do(ctx, req)
+}
+
+func (c *Client) do(ctx context.Context, req *http.Request) (*http.Response, error) {
+	res, err := c.httpClient().Do(req.WithContext(ctx))
+	if err != nil {
+		select {
+		case <-ctx.Done():
+			// Prefer the unadorned context error.
+			// (The acme package had tests assuming this, previously from ctxhttp's
+			// behavior, predating net/http supporting contexts natively)
+			// TODO(bradfitz): reconsider this in the future. But for now this
+			// requires no test updates.
+			return nil, ctx.Err()
+		default:
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (c *Client) fetchNonce(ctx context.Context, url string) (string, error) {
+	resp, err := c.head(ctx, url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	nonce := nonceFromHeader(resp.Header)
+	if nonce == "" {
+		if resp.StatusCode > 299 {
+			return "", responseError(resp)
+		}
+		return "", errors.New("acme: nonce not found")
+	}
+	return nonce, nil
+}
+
+func nonceFromHeader(h http.Header) string {
+	return h.Get("Replay-Nonce")
+}
+
+func (c *Client) responseCert(ctx context.Context, res *http.Response, bundle bool) ([][]byte, error) {
 	b, err := ioutil.ReadAll(io.LimitReader(res.Body, maxCertSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("acme: response stream: %v", err)
@@ -711,7 +841,7 @@ func responseCert(ctx context.Context, client *http.Client, res *http.Response, 
 		return nil, errors.New("acme: rel=up link is too large")
 	}
 	for _, url := range up {
-		cc, err := chainCert(ctx, client, url, 0)
+		cc, err := c.chainCert(ctx, url, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -754,12 +884,12 @@ func responseError(resp *http.Response) error {
 // if the recursion level reaches maxChainLen.
 //
 // First chainCert call starts with depth of 0.
-func chainCert(ctx context.Context, client *http.Client, url string, depth int) ([][]byte, error) {
+func (c *Client) chainCert(ctx context.Context, url string, depth int) ([][]byte, error) {
 	if depth >= maxChainLen {
 		return nil, errors.New("acme: certificate chain is too deep")
 	}
 
-	res, err := ctxhttp.Get(ctx, client, url)
+	res, err := c.get(ctx, url)
 	if err != nil {
 		return nil, err
 	}
@@ -781,7 +911,7 @@ func chainCert(ctx context.Context, client *http.Client, url string, depth int) 
 		return nil, errors.New("acme: certificate chain is too large")
 	}
 	for _, up := range uplink {
-		cc, err := chainCert(ctx, client, up, depth+1)
+		cc, err := c.chainCert(ctx, up, depth+1)
 		if err != nil {
 			return nil, err
 		}
@@ -789,33 +919,6 @@ func chainCert(ctx context.Context, client *http.Client, url string, depth int) 
 	}
 
 	return chain, nil
-}
-
-// postJWS signs the body with the given key and POSTs it to the provided url.
-// The body argument must be JSON-serializable.
-func postJWS(ctx context.Context, client *http.Client, key crypto.Signer, url string, body interface{}) (*http.Response, error) {
-	nonce, err := fetchNonce(ctx, client, url)
-	if err != nil {
-		return nil, err
-	}
-	b, err := jwsEncodeJSON(body, key, nonce)
-	if err != nil {
-		return nil, err
-	}
-	return ctxhttp.Post(ctx, client, url, "application/jose+json", bytes.NewReader(b))
-}
-
-func fetchNonce(ctx context.Context, client *http.Client, url string) (string, error) {
-	resp, err := ctxhttp.Head(ctx, client, url)
-	if err != nil {
-		return "", nil
-	}
-	defer resp.Body.Close()
-	enc := resp.Header.Get("replay-nonce")
-	if enc == "" {
-		return "", errors.New("acme: nonce not found")
-	}
-	return enc, nil
 }
 
 // linkHeader returns URI-Reference values of all Link headers
@@ -919,7 +1022,8 @@ func tlsChallengeCert(san []string, opt []CertOption) (tls.Certificate, error) {
 			NotBefore:             time.Now(),
 			NotAfter:              time.Now().Add(24 * time.Hour),
 			BasicConstraintsValid: true,
-			KeyUsage:              x509.KeyUsageKeyEncipherment,
+			KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+			ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		}
 	}
 	tmpl.DNSNames = san

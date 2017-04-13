@@ -10,6 +10,7 @@ package autocert
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -21,6 +22,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	mathrand "math/rand"
 	"net/http"
 	"strconv"
@@ -29,7 +31,6 @@ import (
 	"time"
 
 	"golang.org/x/crypto/acme"
-	"golang.org/x/net/context"
 )
 
 // pseudoRand is safe for concurrent use.
@@ -40,8 +41,9 @@ func init() {
 	pseudoRand = &lockedMathRand{rnd: mathrand.New(src)}
 }
 
-// AcceptTOS always returns true to indicate the acceptance of a CA Terms of Service
-// during account registration.
+// AcceptTOS is a Manager.Prompt function that always returns true to
+// indicate acceptance of the CA's Terms of Service during account
+// registration.
 func AcceptTOS(tosURL string) bool { return true }
 
 // HostPolicy specifies which host names the Manager is allowed to respond to.
@@ -140,6 +142,12 @@ type Manager struct {
 	// If the Client's account key is already registered, Email is not used.
 	Email string
 
+	// ForceRSA makes the Manager generate certificates with 2048-bit RSA keys.
+	//
+	// If false, a default is used. Currently the default
+	// is EC-based keys using the P-256 curve.
+	ForceRSA bool
+
 	clientMu sync.Mutex
 	client   *acme.Client // initialized by acmeClient method
 
@@ -171,6 +179,9 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 		return nil, errors.New("acme/autocert: missing server name")
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	// check whether this is a token cert requested for TLS-SNI challenge
 	if strings.HasSuffix(name, ".acme.invalid") {
 		m.tokenCertMu.RLock()
@@ -178,7 +189,7 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 		if cert := m.tokenCert[name]; cert != nil {
 			return cert, nil
 		}
-		if cert, err := m.cacheGet(name); err == nil {
+		if cert, err := m.cacheGet(ctx, name); err == nil {
 			return cert, nil
 		}
 		// TODO: cache error results?
@@ -186,7 +197,8 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 	}
 
 	// regular domain
-	cert, err := m.cert(name)
+	name = strings.TrimSuffix(name, ".") // golang.org/issue/18114
+	cert, err := m.cert(ctx, name)
 	if err == nil {
 		return cert, nil
 	}
@@ -195,7 +207,6 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 	}
 
 	// first-time
-	ctx := context.Background() // TODO: use a deadline?
 	if err := m.hostPolicy()(ctx, name); err != nil {
 		return nil, err
 	}
@@ -203,14 +214,14 @@ func (m *Manager) GetCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, 
 	if err != nil {
 		return nil, err
 	}
-	m.cachePut(name, cert)
+	m.cachePut(ctx, name, cert)
 	return cert, nil
 }
 
 // cert returns an existing certificate either from m.state or cache.
 // If a certificate is found in cache but not in m.state, the latter will be filled
 // with the cached value.
-func (m *Manager) cert(name string) (*tls.Certificate, error) {
+func (m *Manager) cert(ctx context.Context, name string) (*tls.Certificate, error) {
 	m.stateMu.Lock()
 	if s, ok := m.state[name]; ok {
 		m.stateMu.Unlock()
@@ -219,7 +230,7 @@ func (m *Manager) cert(name string) (*tls.Certificate, error) {
 		return s.tlscert()
 	}
 	defer m.stateMu.Unlock()
-	cert, err := m.cacheGet(name)
+	cert, err := m.cacheGet(ctx, name)
 	if err != nil {
 		return nil, err
 	}
@@ -241,12 +252,10 @@ func (m *Manager) cert(name string) (*tls.Certificate, error) {
 }
 
 // cacheGet always returns a valid certificate, or an error otherwise.
-func (m *Manager) cacheGet(domain string) (*tls.Certificate, error) {
+func (m *Manager) cacheGet(ctx context.Context, domain string) (*tls.Certificate, error) {
 	if m.Cache == nil {
 		return nil, ErrCacheMiss
 	}
-	// TODO: might want to define a cache timeout on m
-	ctx := context.Background()
 	data, err := m.Cache.Get(ctx, domain)
 	if err != nil {
 		return nil, err
@@ -289,7 +298,7 @@ func (m *Manager) cacheGet(domain string) (*tls.Certificate, error) {
 	return tlscert, nil
 }
 
-func (m *Manager) cachePut(domain string, tlscert *tls.Certificate) error {
+func (m *Manager) cachePut(ctx context.Context, domain string, tlscert *tls.Certificate) error {
 	if m.Cache == nil {
 		return nil
 	}
@@ -300,12 +309,7 @@ func (m *Manager) cachePut(domain string, tlscert *tls.Certificate) error {
 	// private
 	switch key := tlscert.PrivateKey.(type) {
 	case *ecdsa.PrivateKey:
-		b, err := x509.MarshalECPrivateKey(key)
-		if err != nil {
-			return err
-		}
-		pb := &pem.Block{Type: "EC PRIVATE KEY", Bytes: b}
-		if err := pem.Encode(&buf, pb); err != nil {
+		if err := encodeECDSAKey(&buf, key); err != nil {
 			return err
 		}
 	case *rsa.PrivateKey:
@@ -326,9 +330,16 @@ func (m *Manager) cachePut(domain string, tlscert *tls.Certificate) error {
 		}
 	}
 
-	// TODO: might want to define a cache timeout on m
-	ctx := context.Background()
 	return m.Cache.Put(ctx, domain, buf.Bytes())
+}
+
+func encodeECDSAKey(w io.Writer, key *ecdsa.PrivateKey) error {
+	b, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return err
+	}
+	pb := &pem.Block{Type: "EC PRIVATE KEY", Bytes: b}
+	return pem.Encode(w, pb)
 }
 
 // createCert starts the domain ownership verification and returns a certificate
@@ -379,11 +390,21 @@ func (m *Manager) certState(domain string) (*certState, error) {
 	if state, ok := m.state[domain]; ok {
 		return state, nil
 	}
+
 	// new locked state
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	var (
+		err error
+		key crypto.Signer
+	)
+	if m.ForceRSA {
+		key, err = rsa.GenerateKey(rand.Reader, 2048)
+	} else {
+		key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	}
 	if err != nil {
 		return nil, err
 	}
+
 	state := &certState{
 		key:    key,
 		locked: true,
@@ -472,7 +493,7 @@ func (m *Manager) verify(ctx context.Context, domain string) error {
 	if err != nil {
 		return err
 	}
-	m.putTokenCert(name, &cert)
+	m.putTokenCert(ctx, name, &cert)
 	defer func() {
 		// verification has ended at this point
 		// don't need token cert anymore
@@ -490,14 +511,14 @@ func (m *Manager) verify(ctx context.Context, domain string) error {
 
 // putTokenCert stores the cert under the named key in both m.tokenCert map
 // and m.Cache.
-func (m *Manager) putTokenCert(name string, cert *tls.Certificate) {
+func (m *Manager) putTokenCert(ctx context.Context, name string, cert *tls.Certificate) {
 	m.tokenCertMu.Lock()
 	defer m.tokenCertMu.Unlock()
 	if m.tokenCert == nil {
 		m.tokenCert = make(map[string]*tls.Certificate)
 	}
 	m.tokenCert[name] = cert
-	m.cachePut(name, cert)
+	m.cachePut(ctx, name, cert)
 }
 
 // deleteTokenCert removes the token certificate for the specified domain name
@@ -545,6 +566,43 @@ func (m *Manager) stopRenew() {
 	}
 }
 
+func (m *Manager) accountKey(ctx context.Context) (crypto.Signer, error) {
+	const keyName = "acme_account.key"
+
+	genKey := func() (*ecdsa.PrivateKey, error) {
+		return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	}
+
+	if m.Cache == nil {
+		return genKey()
+	}
+
+	data, err := m.Cache.Get(ctx, keyName)
+	if err == ErrCacheMiss {
+		key, err := genKey()
+		if err != nil {
+			return nil, err
+		}
+		var buf bytes.Buffer
+		if err := encodeECDSAKey(&buf, key); err != nil {
+			return nil, err
+		}
+		if err := m.Cache.Put(ctx, keyName, buf.Bytes()); err != nil {
+			return nil, err
+		}
+		return key, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	priv, _ := pem.Decode(data)
+	if priv == nil || !strings.Contains(priv.Type, "PRIVATE") {
+		return nil, errors.New("acme/autocert: invalid account key found in cache")
+	}
+	return parsePrivateKey(priv.Bytes)
+}
+
 func (m *Manager) acmeClient(ctx context.Context) (*acme.Client, error) {
 	m.clientMu.Lock()
 	defer m.clientMu.Unlock()
@@ -558,7 +616,7 @@ func (m *Manager) acmeClient(ctx context.Context) (*acme.Client, error) {
 	}
 	if client.Key == nil {
 		var err error
-		client.Key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		client.Key, err = m.accountKey(ctx)
 		if err != nil {
 			return nil, err
 		}

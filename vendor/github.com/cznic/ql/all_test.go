@@ -2802,7 +2802,14 @@ func testMentionedColumns(s stmt) (err error) {
 			}
 		}
 		if w := x.where; w != nil {
-			mentionedColumns(w.expr)
+			if e := w.expr; e != nil {
+				mentionedColumns(w.expr)
+			}
+			if s := w.sel; s != nil {
+				if err := testMentionedColumns(s); err != nil {
+					return err
+				}
+			}
 		}
 	case *updateStmt:
 		for _, v := range x.list {
@@ -3375,4 +3382,62 @@ func (t issue109) deletePersonAwards(personID int64) {
 func TestIssue109(t *testing.T) {
 	(issue109{T: t}).test(false)
 	(issue109{T: t}).test(true)
+}
+
+// https://github.com/cznic/ql/issues/142
+func TestIssue142(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer os.Chdir(cwd)
+
+	wd, err := ioutil.TempDir("", "ql-test-issue-142")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer os.RemoveAll(wd)
+
+	if err := os.Chdir(wd); err != nil {
+		t.Fatal(err)
+	}
+
+	RegisterDriver()
+	for _, nm := range []string{"test.db", "./test.db", "another.db"} {
+		t.Log(nm)
+		db, err := sql.Open("ql", nm)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if _, err := tx.Exec("drop table if exists t; create table t (c int)"); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		fn := filepath.Join(wd, nm)
+		fi, err := os.Stat(fn)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Log(fn, fi.Size())
+		if fi.Size() == 0 {
+			t.Fatal("DB is empty")
+		}
+	}
 }

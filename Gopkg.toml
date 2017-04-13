@@ -1,0 +1,108 @@
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/AudriusButkevicius/cli"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/AudriusButkevicius/go-nat-pmp"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/bkaradzic/go-lz4"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/calmh/du"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/calmh/luhn"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/calmh/xdr"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/ccding/go-stun"
+
+[[dependencies]]
+  name = "github.com/chmduquesne/rollinghash"
+  revision = "master"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/cznic/ql"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/d4l3k/messagediff"
+
+[[dependencies]]
+  name = "github.com/gobwas/glob"
+  revision = "master"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/gogo/protobuf"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/golang/groupcache"
+
+[[dependencies]]
+  name = "github.com/jackpal/gateway"
+  revision = "master"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/kardianos/osext"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/lib/pq"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/minio/sha256-simd"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/mitchellh/go-wordwrap"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/oschwald/geoip2-golang"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/syndtr/goleveldb"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/thejerf/suture"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/vitrun/qart"
+
+[[dependencies]]
+  branch = "master"
+  name = "github.com/xtaci/kcp-go"
+
+[[dependencies]]
+  branch = "master"
+  name = "golang.org/x/crypto"
+
+[[dependencies]]
+  branch = "master"
+  name = "golang.org/x/net"
+
+[[dependencies]]
+  branch = "master"
+  name = "golang.org/x/text"
+
+[[dependencies]]
+  branch = "master"
+  name = "golang.org/x/time"

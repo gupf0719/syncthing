@@ -1,0 +1,274 @@
+memo = "899679b418dbf34a00721917fdbd12c4aff9d2668f8f3d65cc2fdb3f5c43733b"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/AudriusButkevicius/cli"
+  packages = ["."]
+  revision = "7f561c78b5a4aad858d9fd550c92b5da6d55efbb"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/AudriusButkevicius/go-nat-pmp"
+  packages = ["."]
+  revision = "452c97607362b2ab5a7839b8d1704f0396b640ca"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/AudriusButkevicius/pfilter"
+  packages = ["."]
+  revision = "09b3cfdd04de89f0196caecb0b335d7149a6593a"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/bkaradzic/go-lz4"
+  packages = ["."]
+  revision = "7224d8d8f27ef618c0a95f1ae69dbb0488abc33a"
+
+[[projects]]
+  name = "github.com/calmh/du"
+  packages = ["."]
+  revision = "dd9dc2043353249b2910b29dcfd6f6d4e64f39be"
+  version = "v1.0.1"
+
+[[projects]]
+  name = "github.com/calmh/luhn"
+  packages = ["."]
+  revision = "0c8388ff95fa92d4094011e5a04fc99dea3d1632"
+  version = "v1.0.0"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/calmh/xdr"
+  packages = ["."]
+  revision = "08e072f9cb164f943a92eb59f90f3abc64ac6e8f"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/ccding/go-stun"
+  packages = ["stun"]
+  revision = "04a4eed61c57ecc9903f8983d1d2c17b88d2e9e1"
+
+[[projects]]
+  name = "github.com/chmduquesne/rollinghash"
+  packages = [".","adler32"]
+  revision = "master"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/cznic/b"
+  packages = ["."]
+  revision = "aaaa43c92e509a827e63540510bc94c3003ef2e1"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/cznic/fileutil"
+  packages = ["."]
+  revision = "90cf820aafe8f7df39416fdbb932029ff99bd1ab"
+
+[[projects]]
+  name = "github.com/cznic/internal"
+  packages = ["buffer","file","slice"]
+  revision = "cef02a853c3a93623c42eacd574e7ea05f55531b"
+  version = "1.0.0"
+
+[[projects]]
+  name = "github.com/cznic/lldb"
+  packages = ["."]
+  revision = "bea8611dd5c407f3c5eab9f9c68e887a27dc6f0e"
+  version = "v1.1.0"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/cznic/mathutil"
+  packages = ["."]
+  revision = "1447ad269d64ca91aa8d7079baa40b6fc8b965e7"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/cznic/ql"
+  packages = [".","vendored/github.com/camlistore/go4/lock"]
+  revision = "9cac60d33e9d498c7f2be3a01464bd68ba65935f"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/cznic/sortutil"
+  packages = ["."]
+  revision = "4c7342852e65c2088c981288f2c5610d10b9f7f4"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/cznic/strutil"
+  packages = ["."]
+  revision = "43a89592ed56c227c7fdb1fcaf7d1d08be02ec54"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/cznic/zappy"
+  packages = ["."]
+  revision = "2533cb5b45cc6c07421468ce262899ddc9d53fb7"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/d4l3k/messagediff"
+  packages = ["."]
+  revision = "2fe2a1d40db6c23619ae5bcc8f80a5b43c40581b"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/edsrzf/mmap-go"
+  packages = ["."]
+  revision = "0bce6a6887123b67a60366d2c9fe2dfb74289d2e"
+
+[[projects]]
+  name = "github.com/gobwas/glob"
+  packages = [".","compiler","match","syntax","syntax/ast","syntax/lexer","util/runes","util/strings"]
+  revision = "master"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/gogo/protobuf"
+  packages = ["gogoproto","proto","protoc-gen-gogo/descriptor"]
+  revision = "6fe4aed35b712b681d5d372e06da5344c22ed61f"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/golang/groupcache"
+  packages = ["lru"]
+  revision = "72d04f9fcdec7d3821820cc4a6f150eae553639a"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/golang/snappy"
+  packages = ["."]
+  revision = "553a641470496b2327abcac10b36396bd98e45c9"
+
+[[projects]]
+  name = "github.com/jackpal/gateway"
+  packages = ["."]
+  revision = "master"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/kardianos/osext"
+  packages = ["."]
+  revision = "9d302b58e975387d0b4d9be876622c86cefe64be"
+
+[[projects]]
+  name = "github.com/klauspost/cpuid"
+  packages = ["."]
+  revision = "09cded8978dc9e80714c4d85b0322337b0a1e5e0"
+  version = "v1.0"
+
+[[projects]]
+  name = "github.com/klauspost/reedsolomon"
+  packages = ["."]
+  revision = "5abf0ee302ccf4834e84f63ff74eca3e8b88e4e2"
+  version = "1.3"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/lib/pq"
+  packages = [".","oid"]
+  revision = "2704adc878c21e1329f46f6e56a1c387d788ff94"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/minio/sha256-simd"
+  packages = ["."]
+  revision = "6124d070eb4e7001c244b6ccc282620a5dce44a0"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/mitchellh/go-wordwrap"
+  packages = ["."]
+  revision = "ad45545899c7b13c020ea92b2072220eefad42b8"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/oschwald/geoip2-golang"
+  packages = ["."]
+  revision = "0fd242da7906550802871efe101abfdb1cc550a8"
+
+[[projects]]
+  name = "github.com/oschwald/maxminddb-golang"
+  packages = ["."]
+  revision = "4cf6490e82edd288b91d6a786d85dab042015e24"
+  version = "v1.1.0"
+
+[[projects]]
+  name = "github.com/pkg/errors"
+  packages = ["."]
+  revision = "645ef00459ed84a119197bfb8d8205042c6df63d"
+  version = "v0.8.0"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/rcrowley/go-metrics"
+  packages = ["."]
+  revision = "1f30fe9094a513ce4c700b9a54458bbb0c96996c"
+
+[[projects]]
+  name = "github.com/sasha-s/go-deadlock"
+  packages = ["."]
+  revision = "09aefc0ac06ad74d91ca31acdb11fc981c159149"
+  version = "v0.1.0"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/syndtr/goleveldb"
+  packages = ["leveldb","leveldb/cache","leveldb/comparer","leveldb/errors","leveldb/filter","leveldb/iterator","leveldb/journal","leveldb/memdb","leveldb/opt","leveldb/storage","leveldb/table","leveldb/util"]
+  revision = "8c81ea47d4c41a385645e133e15510fc6a2a74b4"
+
+[[projects]]
+  name = "github.com/thejerf/suture"
+  packages = ["."]
+  revision = "0ac47afae95ad5bc5184ed346bc945168e883f5d"
+  version = "v2.0.1"
+
+[[projects]]
+  name = "github.com/vitrun/qart"
+  packages = ["coding","gf256","qr"]
+  revision = "bf64b92db6b05651d6c25a3dabf2d543b360c0aa"
+  version = "0.1"
+
+[[projects]]
+  branch = "master"
+  name = "github.com/xtaci/kcp-go"
+  packages = ["."]
+  revision = "27888da3bdce84053e12fcaa12e9ca0ac9ce24ba"
+
+[[projects]]
+  name = "github.com/xtaci/smux"
+  packages = ["."]
+  revision = "a1a5df8f92af764f378f07d6a3dd8eb3f7aa190a"
+  version = "v1.0.5"
+
+[[projects]]
+  branch = "master"
+  name = "golang.org/x/crypto"
+  packages = ["bcrypt","blowfish","cast5","pbkdf2","salsa20","salsa20/salsa","tea","twofish","xtea"]
+  revision = "ed779e1bec0180cdfce8135ca6558067b388777b"
+
+[[projects]]
+  branch = "master"
+  name = "golang.org/x/net"
+  packages = ["bpf","context","html","html/atom","internal/iana","internal/netreflect","ipv4","ipv6","proxy"]
+  revision = "d1e1b351919c6738fdeb9893d5c998b161464f0c"
+
+[[projects]]
+  branch = "master"
+  name = "golang.org/x/sys"
+  packages = ["unix","windows"]
+  revision = "f3918c30c5c2cb527c0b071a27c35120a6c0719a"
+
+[[projects]]
+  branch = "master"
+  name = "golang.org/x/text"
+  packages = ["internal/gen","internal/triegen","internal/ucd","transform","unicode/cldr","unicode/norm"]
+  revision = "f4b4367115ec2de254587813edaa901bc1c723a8"
+
+[[projects]]
+  branch = "master"
+  name = "golang.org/x/time"
+  packages = ["rate"]
+  revision = "f51c12702a4d776e4c1fa9b0fabab841babae631"

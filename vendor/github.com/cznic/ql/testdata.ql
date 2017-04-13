@@ -15670,3 +15670,77 @@ COMMIT;
 SELECT * FROM t WHERE c1 = 1;
 |"c1", "c2"
 [1 a]
+
+-- 1347 // https://github.com/cznic/ql/issues/155
+SELECT 42;
+|""
+[42]
+
+-- 1348 // https://github.com/cznic/ql/issues/155, see also #1353
+BEGIN TRANSACTION;
+	CREATE TABLE t (i int);
+	INSERT INTO t VALUES (1);
+	INSERT INTO t VALUES (2);
+	INSERT INTO t VALUES (3);
+COMMIT;
+SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE i == 2) ORDER BY i;
+|"i"
+[1]
+[2]
+[3]
+
+-- 1349 // https://github.com/cznic/ql/issues/155
+BEGIN TRANSACTION;
+	CREATE TABLE t (i int);
+COMMIT;
+SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE i == 2);
+|"i"
+[]
+
+-- 1350 // https://github.com/cznic/ql/issues/155
+BEGIN TRANSACTION;
+	CREATE TABLE t (i int);
+	INSERT INTO t VALUES (1);
+	INSERT INTO t VALUES (2);
+	INSERT INTO t VALUES (3);
+COMMIT;
+SELECT * FROM t WHERE EXISTS (SELECT * FROM t WHERE i == 4);
+|"i"
+[]
+
+-- 1351 // https://github.com/cznic/ql/issues/155
+BEGIN TRANSACTION;
+	CREATE TABLE t (i int);
+	INSERT INTO t VALUES (1);
+	INSERT INTO t VALUES (2);
+	INSERT INTO t VALUES (3);
+COMMIT;
+SELECT * FROM t WHERE NOT EXISTS (SELECT * FROM t WHERE i == 2);
+|"i"
+[]
+
+-- 1352 // https://github.com/cznic/ql/issues/155
+BEGIN TRANSACTION;
+	CREATE TABLE t (i int);
+	INSERT INTO t VALUES (1);
+	INSERT INTO t VALUES (2);
+	INSERT INTO t VALUES (3);
+COMMIT;
+SELECT * FROM t WHERE NOT EXISTS (SELECT * FROM t WHERE i == 4) ORDER BY i;
+|"i"
+[1]
+[2]
+[3]
+
+-- 1353 // https://github.com/cznic/ql/issues/155, illustrates why #1348 should return 3 rows
+BEGIN TRANSACTION;
+	CREATE TABLE t (i int);
+	INSERT INTO t VALUES (1);
+	INSERT INTO t VALUES (2);
+	INSERT INTO t VALUES (3);
+COMMIT;
+SELECT * FROM t WHERE true ORDER BY i
+|"i"
+[1]
+[2]
+[3]

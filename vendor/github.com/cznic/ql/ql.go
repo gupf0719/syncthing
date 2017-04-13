@@ -330,8 +330,21 @@ func (r *orderByRset) plan(ctx *execCtx) (plan, error) {
 }
 
 type whereRset struct {
-	expr expression
-	src  plan
+	expr   expression
+	src    plan
+	sel    *selectStmt
+	exists bool
+}
+
+func (r *whereRset) String() string {
+	if r.sel != nil {
+		s := ""
+		if !r.exists {
+			s += " NOT "
+		}
+		return fmt.Sprintf("%s EXISTS ( %s )", s, strings.TrimSuffix(r.sel.String(), ";"))
+	}
+	return r.expr.String()
 }
 
 func (r *whereRset) planBinOp(x *binaryOperation) (plan, error) {
@@ -514,6 +527,36 @@ func (r *whereRset) planUnaryOp(x *unaryOperation) (plan, error) {
 }
 
 func (r *whereRset) plan(ctx *execCtx) (plan, error) {
+	o := r.src
+	if r.sel != nil {
+		var exists bool
+		p, err := r.sel.plan(ctx)
+		if err != nil {
+			return nil, err
+		}
+		err = p.do(ctx, func(i interface{}, data []interface{}) (bool, error) {
+			if len(data) > 0 {
+				exists = true
+			}
+			return false, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		if r.exists == exists {
+			return o, nil
+		}
+		x := value{val: false}
+		return &wrapFilterPlan{&filterDefaultPlan{o, x, nil}}, nil
+
+	}
+	return r.planExpr(ctx)
+}
+
+func (r *whereRset) planExpr(ctx *execCtx) (plan, error) {
+	if r.expr == nil {
+		return &nullPlan{}, nil
+	}
 	expr, err := r.expr.clone(ctx.arg)
 	if err != nil {
 		return nil, err
@@ -567,6 +610,10 @@ type selectRset struct {
 }
 
 func (r *selectRset) plan(ctx *execCtx) (plan, error) {
+	if r.src == nil {
+		return nil, nil
+	}
+
 	var flds2 []*fld
 	if len(r.flds) != 0 {
 		m := map[string]struct{}{}
@@ -771,16 +818,17 @@ func cols2meta(f []*col) (s string) {
 // DB represent the database capable of executing QL statements.
 type DB struct {
 	cc          *TCtx // Current transaction context
+	exprCache   map[string]expression
+	exprCacheMu sync.Mutex
+	hasIndex2   int // 0: nope, 1: in progress, 2: yes.
 	isMem       bool
 	mu          sync.Mutex
+	queue       []chan struct{}
 	root        *root
 	rw          bool // DB FSM
 	rwmu        sync.RWMutex
 	store       storage
 	tnl         int // Transaction nesting level
-	exprCache   map[string]expression
-	exprCacheMu sync.Mutex
-	hasIndex2   int // 0: nope, 1: in progress, 2: yes.
 }
 
 var selIndex2Expr = MustCompile("select Expr from __Index2_Expr where Index2_ID == $1")
@@ -1086,7 +1134,7 @@ func mustCompile(src string) List {
 	return list
 }
 
-// Execute executes statements in a list while substituting QL paramaters from
+// Execute executes statements in a list while substituting QL parameters from
 // arg.
 //
 // The resulting []Recordset corresponds to the SELECT FROM statements in the
@@ -1214,6 +1262,15 @@ func (db *DB) Execute(ctx *TCtx, l List, arg ...interface{}) (rs []Recordset, in
 	return
 }
 
+func (db *DB) muUnlock() {
+	if n := len(db.queue); n != 0 {
+		db.queue[0] <- struct{}{}
+		copy(db.queue, db.queue[1:])
+		db.queue = db.queue[:n-1]
+	}
+	db.mu.Unlock()
+}
+
 func (db *DB) run1(pc *TCtx, s stmt, arg ...interface{}) (rs Recordset, tnla, tnlb int, err error) {
 	db.mu.Lock()
 	tnla = db.tnl
@@ -1222,7 +1279,7 @@ func (db *DB) run1(pc *TCtx, s stmt, arg ...interface{}) (rs Recordset, tnla, tn
 	case false:
 		switch s.(type) {
 		case beginTransactionStmt:
-			defer db.mu.Unlock()
+			defer db.muUnlock()
 			if pc == nil {
 				return nil, tnla, tnlb, errors.New("BEGIN TRANSACTION: cannot start a transaction in nil TransactionCtx")
 			}
@@ -1239,19 +1296,19 @@ func (db *DB) run1(pc *TCtx, s stmt, arg ...interface{}) (rs Recordset, tnla, tn
 			db.rw = true
 			return
 		case commitStmt:
-			defer db.mu.Unlock()
+			defer db.muUnlock()
 			return nil, tnla, tnlb, errCommitNotInTransaction
 		case rollbackStmt:
-			defer db.mu.Unlock()
+			defer db.muUnlock()
 			return nil, tnla, tnlb, errRollbackNotInTransaction
 		default:
 			if s.isUpdating() {
-				db.mu.Unlock()
+				db.muUnlock()
 				return nil, tnla, tnlb, fmt.Errorf("attempt to update the DB outside of a transaction")
 			}
 
 			db.rwmu.RLock() // can safely grab before Unlock
-			db.mu.Unlock()
+			db.muUnlock()
 			defer db.rwmu.RUnlock()
 			rs, err = s.exec(&execCtx{db, arg}) // R/O tctx
 			return rs, tnla, tnlb, err
@@ -1259,7 +1316,7 @@ func (db *DB) run1(pc *TCtx, s stmt, arg ...interface{}) (rs Recordset, tnla, tn
 	default: // case true:
 		switch s.(type) {
 		case beginTransactionStmt:
-			defer db.mu.Unlock()
+			defer db.muUnlock()
 
 			if pc == nil {
 				return nil, tnla, tnlb, errBeginTransNoCtx
@@ -1267,12 +1324,16 @@ func (db *DB) run1(pc *TCtx, s stmt, arg ...interface{}) (rs Recordset, tnla, tn
 
 			if pc != db.cc {
 				for db.rw {
-					db.mu.Unlock() // Transaction isolation
+					ch := make(chan struct{}, 1)
+					db.queue = append(db.queue, ch)
+					db.mu.Unlock()
+					<-ch
 					db.mu.Lock()
 				}
 
 				db.rw = true
 				db.rwmu.Lock()
+
 			}
 
 			if err = db.store.BeginTransaction(); err != nil {
@@ -1285,7 +1346,7 @@ func (db *DB) run1(pc *TCtx, s stmt, arg ...interface{}) (rs Recordset, tnla, tn
 			tnlb = db.tnl
 			return
 		case commitStmt:
-			defer db.mu.Unlock()
+			defer db.muUnlock()
 			if pc != db.cc {
 				return nil, tnla, tnlb, fmt.Errorf("invalid passed transaction context")
 			}
@@ -1303,7 +1364,7 @@ func (db *DB) run1(pc *TCtx, s stmt, arg ...interface{}) (rs Recordset, tnla, tn
 			db.rwmu.Unlock()
 			return
 		case rollbackStmt:
-			defer db.mu.Unlock()
+			defer db.muUnlock()
 			defer func() { pc.LastInsertID = db.root.lastInsertID }()
 			if pc != db.cc {
 				return nil, tnla, tnlb, fmt.Errorf("invalid passed transaction context")
@@ -1324,18 +1385,18 @@ func (db *DB) run1(pc *TCtx, s stmt, arg ...interface{}) (rs Recordset, tnla, tn
 		default:
 			if pc == nil {
 				if s.isUpdating() {
-					db.mu.Unlock()
+					db.muUnlock()
 					return nil, tnla, tnlb, fmt.Errorf("attempt to update the DB outside of a transaction")
 				}
 
-				db.mu.Unlock() // must Unlock before RLock
+				db.muUnlock() // must Unlock before RLock
 				db.rwmu.RLock()
 				defer db.rwmu.RUnlock()
 				rs, err = s.exec(&execCtx{db, arg})
 				return rs, tnla, tnlb, err
 			}
 
-			defer db.mu.Unlock()
+			defer db.muUnlock()
 			defer func() { pc.LastInsertID = db.root.lastInsertID }()
 			if pc != db.cc {
 				return nil, tnla, tnlb, fmt.Errorf("invalid passed transaction context")
@@ -1361,7 +1422,7 @@ func (db *DB) Flush() (err error) {
 // Close will close the DB. Successful Close is idempotent.
 func (db *DB) Close() error {
 	db.mu.Lock()
-	defer db.mu.Unlock()
+	defer db.muUnlock()
 	if db.store == nil {
 		return nil
 	}
@@ -1380,17 +1441,17 @@ func (db *DB) do(r recordset, f func(data []interface{}) (bool, error)) (err err
 	switch db.rw {
 	case false:
 		db.rwmu.RLock() // can safely grab before Unlock
-		db.mu.Unlock()
+		db.muUnlock()
 		defer db.rwmu.RUnlock()
 	default: // case true:
 		if r.tx == nil {
-			db.mu.Unlock() // must Unlock before RLock
+			db.muUnlock() // must Unlock before RLock
 			db.rwmu.RLock()
 			defer db.rwmu.RUnlock()
 			break
 		}
 
-		defer db.mu.Unlock()
+		defer db.muUnlock()
 		if r.tx != db.cc {
 			return fmt.Errorf("invalid passed transaction context")
 		}
@@ -1569,7 +1630,7 @@ func (db *DB) info() (r *DbInfo, err error) {
 // to obtain the result.
 func (db *DB) Info() (r *DbInfo, err error) {
 	db.mu.Lock()
-	defer db.mu.Unlock()
+	defer db.muUnlock()
 	return db.info()
 }
 
@@ -1595,7 +1656,15 @@ type joinRset struct {
 	on      expression
 }
 
+func (r *joinRset) isZero() bool {
+	return len(r.sources) == 0 && r.typ == 0 && r.on == nil
+
+}
+
 func (r *joinRset) String() string {
+	if r.isZero() {
+		return ""
+	}
 	a := make([]string, len(r.sources))
 	for i, pair0 := range r.sources {
 		pair := pair0.([]interface{})
@@ -1638,6 +1707,9 @@ func (r *joinRset) String() string {
 }
 
 func (r *joinRset) plan(ctx *execCtx) (plan, error) {
+	if r.isZero() {
+		return nil, nil
+	}
 	rsets := make([]plan, len(r.sources))
 	names := make([]string, len(r.sources))
 	var err error
@@ -1696,6 +1768,10 @@ func (r *joinRset) plan(ctx *execCtx) (plan, error) {
 
 	if len(rsets) == 1 {
 		return rsets[0], nil
+	}
+
+	if len(rsets) == 0 {
+		return nil, nil
 	}
 
 	right := len(rsets[len(rsets)-1].fieldNames())
