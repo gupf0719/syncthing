@@ -20,6 +20,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/syndtr/goleveldb/leveldb/storage"
+	"github.com/syndtr/goleveldb/leveldb/util"
 )
 
 var (
@@ -160,11 +161,11 @@ func (err emulatedError) Error() string {
 
 type storageLock struct {
 	s *Storage
-	l storage.Locker
+	r util.Releaser
 }
 
-func (l storageLock) Unlock() {
-	l.l.Unlock()
+func (l storageLock) Release() {
+	l.r.Release()
 	l.s.logI("storage lock released")
 }
 
@@ -331,7 +332,7 @@ func (s *Storage) Log(str string) {
 	s.Storage.Log(str)
 }
 
-func (s *Storage) Lock() (l storage.Locker, err error) {
+func (s *Storage) Lock() (l storage.Lock, err error) {
 	l, err = s.Storage.Lock()
 	if err != nil {
 		s.logI("storage locking failed, err=%v", err)

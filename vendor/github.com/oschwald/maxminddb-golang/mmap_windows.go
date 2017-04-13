@@ -1,5 +1,3 @@
-// +build windows,!appengine
-
 package maxminddb
 
 // Windows support largely borrowed from mmap-go.
@@ -13,25 +11,24 @@ import (
 	"os"
 	"reflect"
 	"sync"
+	"syscall"
 	"unsafe"
-
-	"golang.org/x/sys/windows"
 )
 
 type memoryMap []byte
 
 // Windows
 var handleLock sync.Mutex
-var handleMap = map[uintptr]windows.Handle{}
+var handleMap = map[uintptr]syscall.Handle{}
 
 func mmap(fd int, length int) (data []byte, err error) {
-	h, errno := windows.CreateFileMapping(windows.Handle(fd), nil,
-		uint32(windows.PAGE_READONLY), 0, uint32(length), nil)
+	h, errno := syscall.CreateFileMapping(syscall.Handle(fd), nil,
+		uint32(syscall.PAGE_READONLY), 0, uint32(length), nil)
 	if h == 0 {
 		return nil, os.NewSyscallError("CreateFileMapping", errno)
 	}
 
-	addr, errno := windows.MapViewOfFile(h, uint32(windows.FILE_MAP_READ), 0,
+	addr, errno := syscall.MapViewOfFile(h, uint32(syscall.FILE_MAP_READ), 0,
 		0, uintptr(length))
 	if addr == 0 {
 		return nil, os.NewSyscallError("MapViewOfFile", errno)
@@ -54,7 +51,7 @@ func (m *memoryMap) header() *reflect.SliceHeader {
 }
 
 func flush(addr, len uintptr) error {
-	errno := windows.FlushViewOfFile(addr, len)
+	errno := syscall.FlushViewOfFile(addr, len)
 	return os.NewSyscallError("FlushViewOfFile", errno)
 }
 
@@ -66,7 +63,7 @@ func munmap(b []byte) (err error) {
 	length := uintptr(dh.Len)
 
 	flush(addr, length)
-	err = windows.UnmapViewOfFile(addr)
+	err = syscall.UnmapViewOfFile(addr)
 	if err != nil {
 		return err
 	}
@@ -80,6 +77,6 @@ func munmap(b []byte) (err error) {
 	}
 	delete(handleMap, addr)
 
-	e := windows.CloseHandle(windows.Handle(handle))
+	e := syscall.CloseHandle(syscall.Handle(handle))
 	return os.NewSyscallError("CloseHandle", e)
 }

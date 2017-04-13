@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
+	"strconv"
 	"sync"
 	"time"
-
-	"github.com/petermattis/goid"
 )
 
 // Opts control how deadlock detection behaves.
@@ -62,10 +62,12 @@ func (m *Mutex) Lock() {
 // It is allowed for one goroutine to lock a Mutex and then
 // arrange for another goroutine to unlock it.
 func (m *Mutex) Unlock() {
-	m.mu.Unlock()
-	if !Opts.Disable {
-		PostUnlock(m)
+	if Opts.Disable {
+		m.mu.Unlock()
+		return
 	}
+	m.mu.Unlock()
+	PostUnlock(m)
 }
 
 // An RWMutex is a drop-in replacement for sync.RWMutex.
@@ -94,10 +96,12 @@ func (m *RWMutex) Lock() {
 // goroutine.  One goroutine may RLock (Lock) an RWMutex and then
 // arrange for another goroutine to RUnlock (Unlock) it.
 func (m *RWMutex) Unlock() {
-	m.mu.Unlock()
-	if !Opts.Disable {
-		PostUnlock(m)
+	if Opts.Disable {
+		m.mu.Unlock()
+		return
 	}
+	m.mu.Unlock()
+	PostUnlock(m)
 }
 
 // RLock locks the mutex for reading.
@@ -113,10 +117,12 @@ func (m *RWMutex) RLock() {
 // It is a run-time error if rw is not locked for reading
 // on entry to RUnlock.
 func (m *RWMutex) RUnlock() {
-	if !Opts.Disable {
-		PostUnlock(m)
+	if Opts.Disable {
+		m.mu.RUnlock()
+		return
 	}
 	m.mu.RUnlock()
+	PostUnlock(m)
 }
 
 // RLocker returns a Locker interface that implements
@@ -167,13 +173,13 @@ func lock(lockFn func(), ptr interface{}) {
 				fmt.Fprintf(Opts.LogBuf, "goroutine %v lock %p\n", prev.gid, ptr)
 				printStack(Opts.LogBuf, prev.stack)
 				fmt.Fprintln(Opts.LogBuf, "Have been trying to lock it again for more than", Opts.DeadlockTimeout)
-				fmt.Fprintf(Opts.LogBuf, "goroutine %v lock %p\n", goid.Get(), ptr)
+				fmt.Fprintf(Opts.LogBuf, "goroutine %v lock %p\n", getGID(), ptr)
 				printStack(Opts.LogBuf, callers(2))
 				fmt.Fprintln(Opts.LogBuf)
 				stacks := stacks()
 				grs := bytes.Split(stacks, []byte("\n\n"))
 				for _, g := range grs {
-					if goid.ExtractGID(g) == prev.gid {
+					if extractGID(g) == prev.gid {
 						fmt.Fprintln(Opts.LogBuf, "Here is what goroutine", prev.gid, "doing now")
 						Opts.LogBuf.Write(g)
 						fmt.Fprintln(Opts.LogBuf)
@@ -204,7 +210,7 @@ type lockOrder struct {
 
 type stackGID struct {
 	stack []uintptr
-	gid   int64
+	gid   uint64
 }
 
 type beforeAfter struct {
@@ -227,20 +233,19 @@ func newLockOrder() *lockOrder {
 }
 
 func (l *lockOrder) PostLock(skip int, p interface{}) {
-	stack := callers(skip)
-	gid := goid.Get()
 	l.mu.Lock()
-	l.cur[p] = stackGID{stack, gid}
-	l.mu.Unlock()
+	defer l.mu.Unlock()
+	l.cur[p] = stackGID{callers(skip), getGID()}
 }
 
 func (l *lockOrder) PreLock(skip int, p interface{}) {
 	if Opts.DisableLockOrderDetection {
 		return
 	}
-	stack := callers(skip)
-	gid := goid.Get()
 	l.mu.Lock()
+	defer l.mu.Unlock()
+	stack := callers(skip)
+	gid := getGID()
 	for b, bs := range l.cur {
 		if b == p {
 			continue
@@ -267,13 +272,12 @@ func (l *lockOrder) PreLock(skip int, p interface{}) {
 		}
 	}
 	l.cur[p] = stackGID{stack, gid}
-	l.mu.Unlock()
 }
 
 func (l *lockOrder) PostUnlock(p interface{}) {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	delete(l.cur, p)
-	l.mu.Unlock()
 }
 
 type rlocker RWMutex
@@ -292,6 +296,19 @@ func (l *lockOrder) other(ptr interface{}) {
 		printStack(Opts.LogBuf, pp.stack)
 	}
 	fmt.Fprintln(Opts.LogBuf)
+}
+
+// Hacky way of getting a goroutine ID.
+func getGID() uint64 {
+	b := make([]byte, 64)
+	return extractGID(b[:runtime.Stack(b, false)])
+}
+
+func extractGID(stack []byte) uint64 {
+	b := bytes.TrimPrefix(stack, []byte("goroutine "))
+	b = b[:bytes.IndexByte(b, ' ')]
+	gid, _ := strconv.ParseUint(string(b), 10, 64)
+	return gid
 }
 
 const header = "POTENTIAL DEADLOCK:"

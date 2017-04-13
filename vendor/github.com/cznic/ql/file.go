@@ -89,7 +89,7 @@ func OpenFile(name string, opt *Options) (db *DB, err error) {
 		}
 	}
 
-	fi, err := newFileFromOSFile(f, opt.Headroom) // always ACID
+	fi, err := newFileFromOSFile(f) // always ACID
 	if err != nil {
 		return
 	}
@@ -100,8 +100,6 @@ func OpenFile(name string, opt *Options) (db *DB, err error) {
 			return f0, err
 		}
 	}
-
-	fi.removeEmptyWAL = opt.RemoveEmptyWAL
 
 	return newDB(fi)
 }
@@ -128,25 +126,10 @@ func OpenFile(name string, opt *Options) (db *DB, err error) {
 // interface.
 //
 // If TempFile is nil it defaults to ioutil.TempFile.
-//
-// Headroom
-//
-// Headroom selects the minimum size a WAL file will have. The "extra"
-// allocated file space serves as a headroom. Commits that fit into the
-// headroom should not fail due to 'not enough space on the volume' errors. The
-// headroom parameter is first rounded-up to a non negative multiple of the
-// size of the lldb.Allocator atom.
-//
-// RemoveEmptyWAL
-//
-// RemoveEmptyWAL controls whether empty WAL files should be deleted on
-// clean exit.
 type Options struct {
-	CanCreate      bool
-	OSFile         lldb.OSFile
-	TempFile       func(dir, prefix string) (f lldb.OSFile, err error)
-	Headroom       int64
-	RemoveEmptyWAL bool
+	CanCreate bool
+	OSFile    lldb.OSFile
+	TempFile  func(dir, prefix string) (f lldb.OSFile, err error)
 }
 
 type fileBTreeIterator struct {
@@ -275,7 +258,7 @@ func infer(from []interface{}, to *[]*col) {
 			case time.Duration:
 				c.typ = qDuration
 			case chunk:
-				vals, err := lldb.DecodeScalars(x.b)
+				vals, err := lldb.DecodeScalars([]byte(x.b))
 				if err != nil {
 					panic(err)
 				}
@@ -391,20 +374,19 @@ func (t *fileTemp) Set(k, v []interface{}) (err error) {
 }
 
 type file struct {
-	a              *lldb.Allocator
-	codec          *gobCoder
-	f              lldb.Filer
-	f0             lldb.OSFile
-	id             int64
-	lck            io.Closer
-	mu             sync.Mutex
-	name           string
-	tempFile       func(dir, prefix string) (f lldb.OSFile, err error)
-	wal            *os.File
-	removeEmptyWAL bool // Whether empty WAL files should be removed on close
+	a        *lldb.Allocator
+	codec    *gobCoder
+	f        lldb.Filer
+	f0       lldb.OSFile
+	id       int64
+	lck      io.Closer
+	mu       sync.Mutex
+	name     string
+	tempFile func(dir, prefix string) (f lldb.OSFile, err error)
+	wal      *os.File
 }
 
-func newFileFromOSFile(f lldb.OSFile, headroom int64) (fi *file, err error) {
+func newFileFromOSFile(f lldb.OSFile) (fi *file, err error) {
 	nm := lockName(f.Name())
 	lck, err := lock.Lock(nm)
 	if err != nil {
@@ -452,7 +434,9 @@ func newFileFromOSFile(f lldb.OSFile, headroom int64) (fi *file, err error) {
 			return nil, err
 		}
 
-		closew = st.Size() == 0
+		if st.Size() != 0 {
+			return nil, fmt.Errorf("(file-001) non empty WAL file %s exists", wn)
+		}
 	}
 
 	info, err := f.Stat()
@@ -470,7 +454,7 @@ func newFileFromOSFile(f lldb.OSFile, headroom int64) (fi *file, err error) {
 
 		filer := lldb.Filer(lldb.NewOSFiler(f))
 		filer = lldb.NewInnerFiler(filer, 16)
-		if filer, err = lldb.NewACIDFiler(filer, w, lldb.MinWAL(headroom)); err != nil {
+		if filer, err = lldb.NewACIDFiler(filer, w); err != nil {
 			return nil, err
 		}
 
@@ -524,7 +508,7 @@ func newFileFromOSFile(f lldb.OSFile, headroom int64) (fi *file, err error) {
 
 		filer := lldb.Filer(lldb.NewOSFiler(f))
 		filer = lldb.NewInnerFiler(filer, 16)
-		if filer, err = lldb.NewACIDFiler(filer, w, lldb.MinWAL(headroom)); err != nil {
+		if filer, err = lldb.NewACIDFiler(filer, w); err != nil {
 			return nil, err
 		}
 
@@ -605,22 +589,12 @@ func (s *file) Close() (err error) {
 
 	es := s.f0.Sync()
 	ef := s.f0.Close()
-	var ew, estat, eremove error
+	var ew error
 	if s.wal != nil {
-		remove := false
-		wn := s.wal.Name()
-		if s.removeEmptyWAL {
-			var stat os.FileInfo
-			stat, estat = s.wal.Stat()
-			remove = stat.Size() == 0
-		}
 		ew = s.wal.Close()
-		if remove {
-			eremove = os.Remove(wn)
-		}
 	}
 	el := s.lck.Close()
-	return errSet(&err, es, ef, ew, el, estat, eremove)
+	return errSet(&err, es, ef, ew, el)
 }
 
 func (s *file) Name() string { return s.name }

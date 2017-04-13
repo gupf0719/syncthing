@@ -103,7 +103,7 @@ func (v *verifier) verifySearchTree() (map[uint]bool, error) {
 		if err != nil {
 			return nil, err
 		}
-		offsets[uint(offset)] = true
+		offsets[offset] = true
 	}
 	if err := it.Err(); err != nil {
 		return nil, err

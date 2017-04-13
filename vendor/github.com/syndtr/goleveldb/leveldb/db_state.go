@@ -7,17 +7,12 @@
 package leveldb
 
 import (
-	"errors"
 	"sync/atomic"
 	"time"
 
 	"github.com/syndtr/goleveldb/leveldb/journal"
 	"github.com/syndtr/goleveldb/leveldb/memdb"
 	"github.com/syndtr/goleveldb/leveldb/storage"
-)
-
-var (
-	errHasFrozenMem = errors.New("has frozen mem")
 )
 
 type memDB struct {
@@ -104,7 +99,7 @@ func (db *DB) mpoolDrain() {
 			case <-db.memPool:
 			default:
 			}
-		case <-db.closeC:
+		case _, _ = <-db.closeC:
 			ticker.Stop()
 			// Make sure the pool is drained.
 			select {
@@ -131,7 +126,7 @@ func (db *DB) newMem(n int) (mem *memDB, err error) {
 	defer db.memMu.Unlock()
 
 	if db.frozenMem != nil {
-		return nil, errHasFrozenMem
+		panic("still has frozen mem")
 	}
 
 	if db.journal == nil {
@@ -169,7 +164,7 @@ func (db *DB) getMems() (e, f *memDB) {
 	return db.mem, db.frozenMem
 }
 
-// Get effective memdb.
+// Get frozen memdb.
 func (db *DB) getEffectiveMem() *memDB {
 	db.memMu.RLock()
 	defer db.memMu.RUnlock()

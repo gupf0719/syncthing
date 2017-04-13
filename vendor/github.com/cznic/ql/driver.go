@@ -14,10 +14,8 @@ import (
 	"fmt"
 	"io"
 	"math/big"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -146,49 +144,21 @@ func (d *sqlDriver) lock() func() {
 // efficient re-use.
 //
 // The returned connection is only used by one goroutine at a time.
-//
-// The name supported URL parameters:
-//
-//	headroom	Size of the WAL headroom. See https://github.com/cznic/ql/issues/140.
 func (d *sqlDriver) Open(name string) (driver.Conn, error) {
-	switch {
-	case d == fileDriver:
-		if !strings.Contains(name, "://") && !strings.HasPrefix(name, "file") {
-			name = "file://" + name
-		}
-	case d == memDriver:
-		if !strings.Contains(name, "://") && !strings.HasPrefix(name, "memory") {
-			name = "memory://" + name
-		}
-	default:
+	if d != fileDriver && d != memDriver {
 		return nil, fmt.Errorf("open: unexpected/unsupported instance of driver.Driver: %p", d)
 	}
 
-	name = filepath.ToSlash(name) // Ensure / separated URLs on Windows
-	uri, err := url.Parse(name)
-	if err != nil {
-		return nil, err
-	}
-
-	switch uri.Scheme {
-	case "file":
-		// ok
-	case "memory":
+	switch {
+	case d == fileDriver && strings.HasPrefix(name, "file://"):
+		name = name[len("file://"):]
+	case d == fileDriver && strings.HasPrefix(name, "memory://"):
 		d = memDriver
-	default:
-		return nil, fmt.Errorf("open: unexpected/unsupported scheme: %s", uri.Scheme)
+		name = name[len("memory://"):]
 	}
-
-	name = filepath.Clean(filepath.Join(uri.Host, uri.Path))
-	if d == fileDriver && (name == "" || name == "." || name == string(os.PathSeparator)) {
+	name = filepath.Clean(name)
+	if name == "" || name == "." || name == string(os.PathSeparator) {
 		return nil, fmt.Errorf("invalid DB name %q", name)
-	}
-
-	var headroom int64
-	if a := uri.Query()["headroom"]; len(a) != 0 {
-		if headroom, err = strconv.ParseInt(a[0], 10, 64); err != nil {
-			return nil, err
-		}
 	}
 
 	defer d.lock()()
@@ -200,7 +170,7 @@ func (d *sqlDriver) Open(name string) (driver.Conn, error) {
 		case true:
 			db0, err = OpenMem()
 		default:
-			db0, err = OpenFile(name, &Options{CanCreate: true, Headroom: headroom})
+			db0, err = OpenFile(name, &Options{CanCreate: true})
 		}
 		if err != nil {
 			return nil, err

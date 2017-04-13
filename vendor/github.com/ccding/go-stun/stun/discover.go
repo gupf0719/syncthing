@@ -88,11 +88,6 @@ func (c *Client) discover(conn net.PacketConn, addr *net.UDPAddr) (NATType, *Hos
 		resp.serverAddr.Port() != uint16(addr.Port) {
 		return NATError, mappedAddr, errors.New("Server error: response IP/port")
 	}
-	// if changedAddr is not available, use otherAddr as changedAddr,
-	// which is updated in RFC 5780
-	if changedAddr == nil {
-		changedAddr = resp.otherAddr
-	}
 	// changedAddr shall not be nil
 	if changedAddr == nil {
 		return NATError, mappedAddr, errors.New("Server error: no changed address.")
@@ -141,9 +136,10 @@ func (c *Client) discover(conn net.PacketConn, addr *net.UDPAddr) (NATType, *Hos
 		resp.serverAddr.Port() != uint16(caddr.Port) {
 		return NATError, mappedAddr, errors.New("Server error: response IP/port")
 	}
-	if mappedAddr.IP() == resp.mappedAddr.IP() && mappedAddr.Port() == resp.mappedAddr.Port() {
-		// Perform test3 to see if the client can receive packet sent
+	if mappedAddr.IP() == resp.mappedAddr.IP() {
+		// Perform test2 to see if the client can receive packet sent
 		// from another port.
+		caddr.Port = addr.Port
 		c.logger.Debugln("Do Test3")
 		c.logger.Debugln("Send To:", caddr)
 		resp, err = c.test3(conn, caddr)
